@@ -18,6 +18,10 @@ var (
 	RoofRun   = 12.
 )
 
+func bent(m *model.Skyciv, ) {
+
+}
+
 func main() {
 	m := model.NewModel()
 
@@ -33,7 +37,14 @@ func main() {
 	post00 := redPine7x9.NewContinuousMember(-Width/2, 0, 0, -Width/2, Height, 0)
 	post01 := redPine7x9.NewContinuousMember(Width/2, 0, 0, Width/2, Height, 0)
 
-	// var tieBeam *model.Member
+	post00.A().FixedSupport()
+	post01.A().FixedSupport()
+
+	rooftop := m.NewNode(0, Height+Width/2*RoofRise/RoofRun, 0)
+	redPine7x9.NewContinuousMemberBetweenNodes(post00.B(), rooftop)
+	redPine7x9.NewContinuousMemberBetweenNodes(post01.B(), rooftop)
+
+	var tieBeam *model.Member
 
 	if tieNode0, _, err := post00.Split(TieHeight); err != nil {
 		fmt.Fprintf(os.Stderr, "error splitting post for tie beam: %e\n", err)
@@ -42,7 +53,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error splitting post for tie beam: %e\n", err)
 		return
 	} else {
-		_ = redPine7x9.NewContinuousMemberBetweenNodes(tieNode0, tieNode1)
+		tieBeam = redPine7x9.NewContinuousMemberBetweenNodes(tieNode0, tieNode1)
+	}
+
+	// add braces
+	if postBrace0, _, err := post00.Split(-BraceRise); err != nil {
+		panic(err)
+	} else if postBrace1, _, err := post01.Split(-BraceRise); err != nil {
+		panic(err)
+	} else if tieBrace0, tieBeamR, err := tieBeam.Split(BraceRise); err != nil {
+		panic(err)
+	} else if tieBrace1, _, err := tieBeamR.Split(-BraceRise); err != nil {
+		panic(err)
+	} else {
+		redPine7x9.NewContinuousMemberBetweenNodes(postBrace0, tieBrace0)
+		redPine7x9.NewContinuousMemberBetweenNodes(postBrace1, tieBrace1)
 	}
 
 	b, err := json.MarshalIndent(m, "", "\t")
@@ -52,4 +77,5 @@ func main() {
 	}
 
 	os.Stdout.Write(b)
+	os.Stdout.Write([]byte("\n"))
 }

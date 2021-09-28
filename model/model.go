@@ -63,6 +63,25 @@ type Settings struct {
 
 type Details struct{}
 
+type Vector struct {
+	X, Y, Z float64
+}
+
+func (v Vector) Length() float64 {
+	return math.Sqrt(v.X*v.X + v.Y*v.Y + v.Z*v.Z)
+}
+
+func (v Vector) Dot(w Vector) float64 {
+	return v.X*w.X + v.Y*w.Y + v.Z*w.Z
+}
+
+func (A Vector) Diff(B Vector) (v Vector) {
+	v.X = A.X - B.X
+	v.Y = A.Y - B.Y
+	v.Z = A.Z - B.Z
+	return
+}
+
 type Node struct {
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
@@ -70,6 +89,13 @@ type Node struct {
 	Id      int     `json:"-"`
 	model   *Skyciv
 	support *Support
+}
+
+func (n *Node) ToVector() (v Vector) {
+	v.X = n.X
+	v.Y = n.Y
+	v.Z = n.Z
+	return
 }
 
 func (n *Node) FixedSupport() {
@@ -106,34 +132,70 @@ type Member struct {
 	model         *Skyciv
 }
 
+func Distance(A, B *Node) float64 {
+	return math.Sqrt((A.X-B.X)*(A.X-B.X) + (A.Y-B.Y)*(A.Y-B.Y) + (A.Z-B.Z)*(A.Z-B.Z))
+}
+
+func (m *Member) distanceTo(x, y, z float64) (t float64, d float64) {
+	A := m.A().ToVector()
+	B := m.B().ToVector()
+	C := Vector{x, y, z}
+
+	ab := B.Diff(A).Length()
+	ac := C.Diff(A).Length()
+	bc := C.Diff(A).Length()
+	AC := A.Diff(C)
+	BA := B.Diff(A)
+
+	t = AC.Dot(BA) / ab / ab
+	d = (ac*ac*bc*bc - AC.Dot(BA)*AC.Dot(BA)) / ab / ab
+	return
+}
+
 func (m *Member) A() *Node {
 	return m.model.Nodes[m.NodeA]
 }
 func (m *Member) B() *Node {
 	return m.model.Nodes[m.NodeB]
 }
-func (m *Member) Split(fromA float64) (*Node, *Member, error) {
+
+// negative numbers start from B
+func (m *Member) Split(distance float64) (*Node, *Member, error) {
 	A := m.A()
 	B := m.B()
-	length := math.Sqrt((A.X-B.X)*(A.X-B.X) + (A.Y-B.Y)*(A.Y-B.Y) + (A.Z-B.Z)*(A.Z-B.Z))
-	if fromA < 0 || fromA > length {
-		return nil, nil, fmt.Errorf("distance %f is less than 0 or greater than member length %f", fromA, length)
+
+	length := Distance(A, B)
+	if distance < -length || distance > length {
+		return nil, nil, fmt.Errorf("distance %f is less than 0 or greater than member length %f", distance, length)
 	}
 
-	fromA /= length // as a percentage
-	x := (B.X-A.X)*fromA + A.X
-	y := (B.Y-A.Y)*fromA + A.Y
-	z := (B.Z-A.Z)*fromA + A.Z
+	distance /= length // as a percentage
+	var x, y, z float64
+
+	if distance >= 0 {
+		x = (B.X-A.X)*distance + A.X
+		y = (B.Y-A.Y)*distance + A.Y
+		z = (B.Z-A.Z)*distance + A.Z
+	} else {
+		x = (B.X-A.X)*distance + B.X
+		y = (B.Y-A.Y)*distance + B.Y
+		z = (B.Z-A.Z)*distance + B.Z
+	}
 
 	if A.Colocated(x, y, z) || B.Colocated(x, y, z) {
-		return nil, nil, fmt.Errorf("distance %f is too close to zero or length %f", fromA*length, length)
+		return nil, nil, fmt.Errorf("distance %f is too close to zero or length %f", distance*length, length)
 	}
 
-	C := m.model.newOrGetNode(x, y, z)
+	C := m.model.NewNode(x, y, z)
 	m2 := &Member{}
 	*m2 = *m // duplicate m
-	m.NodeB = C.Id
-	m2.NodeA = C.Id
+	if distance >= 0 {
+		m.NodeB = C.Id
+		m2.NodeA = C.Id
+	} else {
+		m.NodeA = C.Id
+		m2.NodeB = C.Id
+	}
 	m2.Id = len(m.model.Members) + 1
 	// TODO: what to do about offsets??
 	m.model.Members[m2.Id] = m2
@@ -303,22 +365,22 @@ type SectionAux struct {
 }
 
 type Section struct {
-	Version     int     `json:"version"`
-	Name        string  `json:"name"`
-	Area        float64 `json:"area"`
-	Iz          float64
-	Iy          float64
+	Version     int         `json:"version,omitempty"`
+	Name        string      `json:"name,omitempty"`
+	Area        float64     `json:"area,omitempty"`
+	Iz          float64     `json:"Iz,omitempty"`
+	Iy          float64     `json:"Iy,omitempty"`
 	MaterialId  int         `json:"material_id"`
-	Aux         *SectionAux `json:"aux"`
-	J           float64     `json:"J"`
+	Aux         *SectionAux `json:"aux,omitempty"`
+	J           float64     `json:"J,omitempty"`
 	Id          int         `json:"-"`
-	LoadSection []string    `json:"load_section"`
+	LoadSection []string    `json:"load_section,omitempty"`
 	model       *Skyciv
 }
 
 func (s *Section) NewContinuousMember(x0, y0, z0, x1, y1, z1 float64) *Member {
-	n0 := s.model.newOrGetNode(x0, y0, z0)
-	n1 := s.model.newOrGetNode(x1, y1, z1)
+	n0 := s.model.NewNode(x0, y0, z0)
+	n1 := s.model.NewNode(x1, y1, z1)
 	return s.NewContinuousMemberBetweenNodes(n0, n1)
 }
 
@@ -402,6 +464,20 @@ type Suppression struct {
 	LoadCombinations []string `json:"load_combinations"`
 }
 
+func emptySuppression() Suppression {
+	return Suppression{
+		Members:          []string{},
+		Plates:           []string{},
+		Supports:         []string{},
+		Moments:          []string{},
+		DistributedLoads: []string{},
+		PointLoads:       []string{},
+		AreaLoads:        []string{},
+		Pressures:        []string{},
+		LoadCombinations: []string{},
+	}
+}
+
 type Suppress struct {
 	Suppressions map[string]Suppression
 	CurrentCase  string
@@ -434,7 +510,7 @@ type Skyciv struct {
 	DistributedLoads         map[int]interface{}  `json:"distributed_loads"`
 	Pressures                map[int]interface{}  `json:"pressures"`
 	AreaLoads                map[int]*AreaLoad    `json:"area_loads"`
-	MemberPrestressLoads     map[int]interface{}  `json:"member_prestress_laods"`
+	MemberPrestressLoads     map[int]interface{}  `json:"member_prestress_loads"`
 	SelfWeight               map[int]*SelfWeight  `json:"self_weight"`
 	LoadCombinations         map[int]interface{}  `json:"load_combinations"`
 	LoadCases                map[int]interface{}  `json:"load_cases"`
@@ -468,7 +544,7 @@ func NewModel() *Skyciv {
 		Settlements:              make(map[int]interface{}),
 		AreaLoads:                make(map[int]*AreaLoad),
 		SelfWeight:               make(map[int]*SelfWeight),
-		Groups:                   []*Group{},
+		Groups:                   []*Group{nil, nil},
 		PointLoads:               make(map[int]interface{}),
 		Moments:                  make(map[int]interface{}),
 		DistributedLoads:         make(map[int]interface{}),
@@ -482,6 +558,10 @@ func NewModel() *Skyciv {
 		NotionalLoads:            make(map[int]interface{}),
 		Suppress: Suppress{
 			CurrentCase: "User Defined",
+			Suppressions: map[string]Suppression{
+				"All On":       emptySuppression(),
+				"User Defined": emptySuppression(),
+			},
 		},
 	}
 }
@@ -560,7 +640,24 @@ func (n *Node) Colocated(x, y, z float64) bool {
 	return isClose(n.X, x) && isClose(n.Y, y) && isClose(n.Z, z)
 }
 
-func (m *Skyciv) newOrGetNode(x, y, z float64) *Node {
+func (m *Skyciv) FindMemberByPoint(x, y, z float64) *Member {
+	minDistance := math.MaxFloat64
+	var minMember *Member
+	for _, mem := range m.Members {
+		t, d := mem.distanceTo(x, y, z)
+
+		if t < 0 || t > 1 {
+			continue
+		}
+		if d < minDistance {
+			minDistance = d
+			minMember = mem
+		}
+	}
+	return minMember
+}
+
+func (m *Skyciv) NewNode(x, y, z float64) *Node {
 	var found *Node
 	for _, n := range m.Nodes {
 		if n.Colocated(x, y, z) {
