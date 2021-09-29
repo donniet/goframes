@@ -2,8 +2,10 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 )
 
@@ -143,12 +145,12 @@ func (m *Member) distanceTo(x, y, z float64) (t float64, d float64) {
 
 	ab := B.Diff(A).Length()
 	ac := C.Diff(A).Length()
-	bc := C.Diff(A).Length()
-	AC := A.Diff(C)
+	// bc := C.Diff(A).Length()
+	CA := C.Diff(A)
 	BA := B.Diff(A)
 
-	t = AC.Dot(BA) / ab / ab
-	d = (ac*ac*bc*bc - AC.Dot(BA)*AC.Dot(BA)) / ab / ab
+	t = CA.Dot(BA) / ab / ab
+	d = (ac*ac*ab*ab - CA.Dot(BA)*CA.Dot(BA)) / ab / ab
 	return
 }
 
@@ -157,6 +159,43 @@ func (m *Member) A() *Node {
 }
 func (m *Member) B() *Node {
 	return m.model.Nodes[m.NodeB]
+}
+
+var (
+	ErrColocated = errors.New("Colocated with Node")
+)
+
+// splits the member as close as it can to the specified point
+func (m *Member) SplitAt(x, y, z float64) (*Node, *Member, error) {
+	A := m.A()
+	B := m.B()
+	t, _ := m.distanceTo(x, y, z)
+
+	if t < 0 || t > 1 {
+		return nil, nil, fmt.Errorf("cannot split a node outside of it's length")
+	}
+
+	// adjust to the real splitting spot
+	x = A.X + (B.X-A.X)*t
+	y = A.Y + (B.Y-A.Y)*t
+	z = A.Z + (B.Z-A.Z)*t
+
+	if A.Colocated(x, y, z) {
+		return A, nil, ErrColocated
+	} else if B.Colocated(x, y, z) {
+		return B, nil, ErrColocated
+	}
+
+	C := m.model.NewNode(x, y, z)
+	m2 := &Member{}
+	*m2 = *m // duplicate m
+	m.NodeB = C.Id
+	m2.NodeA = C.Id
+	m2.Id = len(m.model.Members) + 1
+	// TODO: what to do about offsets??
+	m.model.Members[m2.Id] = m2
+
+	return C, m2, nil
 }
 
 // negative numbers start from B
@@ -427,7 +466,7 @@ func (s StringIntList) MarshalJSON() ([]byte, error) {
 			builder.WriteString(",")
 		}
 	}
-	return []byte(builder.String()), nil
+	return json.Marshal(builder.String())
 }
 
 type AreaLoad struct {
@@ -583,7 +622,6 @@ func (m *Skyciv) NewAreaLoad(nodes []*Node) (*AreaLoad, error) {
 	al := &AreaLoad{
 		Nodes:            nl,
 		ColumnDirection:  nl[0:2],
-		Direction:        m.Settings.VerticalAxis,
 		LoadedMemberAxis: "all",
 		Type:             "one_way",
 		Id:               len(m.AreaLoads) + 1,
@@ -640,11 +678,37 @@ func (n *Node) Colocated(x, y, z float64) bool {
 	return isClose(n.X, x) && isClose(n.Y, y) && isClose(n.Z, z)
 }
 
-func (m *Skyciv) FindMemberByPoint(x, y, z float64) *Member {
+func (m *Skyciv) FindNearestNode(x, y, z float64) (minNode *Node) {
+	minDistance := math.MaxFloat64
+	for _, node := range m.Nodes {
+		dist := node.ToVector().Diff(Vector{x, y, z}).Length()
+		if dist < minDistance {
+			minDistance = dist
+			minNode = node
+		}
+	}
+	return
+}
+
+func (m *Skyciv) FindNearestMemberAndSplitAt(x, y, z float64) (*Node, error) {
+	mem := m.FindNearestMember(x, y, z)
+	if mem == nil {
+		return nil, fmt.Errorf("could not find a nearest member to %f,%f,%f", x, y, z)
+	}
+	n, _, err := mem.SplitAt(x, y, z)
+	if err == ErrColocated {
+		return n, nil
+	}
+	return n, err
+}
+
+func (m *Skyciv) FindNearestMember(x, y, z float64) *Member {
 	minDistance := math.MaxFloat64
 	var minMember *Member
 	for _, mem := range m.Members {
 		t, d := mem.distanceTo(x, y, z)
+
+		fmt.Fprintf(os.Stderr, "t, d: %f, %f\n", t, d)
 
 		if t < 0 || t > 1 {
 			continue
@@ -654,6 +718,7 @@ func (m *Skyciv) FindMemberByPoint(x, y, z float64) *Member {
 			minMember = mem
 		}
 	}
+	fmt.Fprintf(os.Stderr, "min: %f %d\n", minDistance, minMember.Id)
 	return minMember
 }
 
