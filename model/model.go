@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 )
 
@@ -303,19 +302,19 @@ type Operations struct {
 }
 
 type Material struct {
-	Name               string   `json:"name"`
-	ElasticityModulus  float64  `json:"elasticity_modulus"`
-	Density            float64  `json:"density"`
-	PoissonsRatio      float64  `json:"poissons_ratio"`
-	YieldStrength      *float64 `json:"yield_strength"`
-	UltimateStrength   float64  `json:"ultimate_strength"`
-	Class              string   `json:"class"`
-	ElasticityModulusX *float64 `json:"elasticity_modulus_x"`
-	ElasticityModulusY *float64 `json:"elasticity_modulus_y"`
-	ShearModulusXY     *float64 `json:"shear_modulus_xy"`
-	ShearModulusXZ     *float64 `json:"shear_modulus_xz"`
-	ShearModulusYZ     *float64 `json:"shear_modulus_yz"`
-	Id                 int      `json:"id"`
+	Name               string  `json:"name"`
+	ElasticityModulus  float64 `json:"elasticity_modulus"`
+	Density            float64 `json:"density"`
+	PoissonsRatio      float64 `json:"poissons_ratio"`
+	YieldStrength      float64 `json:"yield_strength,omitempty"`
+	UltimateStrength   float64 `json:"ultimate_strength"`
+	Class              string  `json:"class"`
+	ElasticityModulusX float64 `json:"elasticity_modulus_x,omitempty"`
+	ElasticityModulusY float64 `json:"elasticity_modulus_y,omitempty"`
+	ShearModulusXY     float64 `json:"shear_modulus_xy,omitempty"`
+	ShearModulusXZ     float64 `json:"shear_modulus_xz,omitempty"`
+	ShearModulusYZ     float64 `json:"shear_modulus_yz,omitempty"`
+	Id                 int     `json:"id"`
 	model              *Skyciv
 }
 
@@ -532,32 +531,32 @@ func (s *Suppress) MarshalJSON() ([]byte, error) {
 }
 
 type Skyciv struct {
-	DataVersion              int                  `json:"dataVersion"`
-	Settings                 Settings             `json:"settings"`
-	Details                  []Details            `json:"details"`
-	Nodes                    map[int]*Node        `json:"nodes"`
-	Members                  map[int]*Member      `json:"members"`
-	Plates                   map[int]*Plate       `json:"plates"`
-	MeshedPlates             map[int]*MeshedPlate `json:"meshed_plates"`
-	Sections                 map[int]*Section     `json:"sections"`
-	Materials                map[int]*Material    `json:"materials"`
-	Supports                 map[int]*Support     `json:"supports"`
-	Settlements              map[int]interface{}  `json:"settlements"`
-	Groups                   []*Group             `json:"groups"`
-	PointLoads               map[int]interface{}  `json:"point_loads"`
-	Moments                  map[int]interface{}  `json:"moments"`
-	DistributedLoads         map[int]interface{}  `json:"distributed_loads"`
-	Pressures                map[int]interface{}  `json:"pressures"`
-	AreaLoads                map[int]*AreaLoad    `json:"area_loads"`
-	MemberPrestressLoads     map[int]interface{}  `json:"member_prestress_loads"`
-	SelfWeight               map[int]*SelfWeight  `json:"self_weight"`
-	LoadCombinations         map[int]interface{}  `json:"load_combinations"`
-	LoadCases                map[int]interface{}  `json:"load_cases"`
-	NodalMasses              map[int]interface{}  `json:"nodal_masses"`
-	NodalMassesConversionMap map[int]interface{}  `json:"nodal_masses_conversion_map"`
-	SpectralLoads            map[int]interface{}  `json:"spectral_loads"`
-	NotionalLoads            map[int]interface{}  `json:"notional_loads"`
-	Suppress                 Suppress             `json:"suppress"`
+	DataVersion          int                  `json:"dataVersion"`
+	Settings             Settings             `json:"settings"`
+	Details              []Details            `json:"details"`
+	Nodes                map[int]*Node        `json:"nodes"`
+	Members              map[int]*Member      `json:"members"`
+	Plates               map[int]*Plate       `json:"plates"`
+	MeshedPlates         map[int]*MeshedPlate `json:"meshed_plates"`
+	Sections             map[int]*Section     `json:"sections"`
+	Materials            map[int]*Material    `json:"materials"`
+	Supports             map[int]*Support     `json:"supports"`
+	Settlements          map[int]interface{}  `json:"settlements"`
+	Groups               []*Group             `json:"groups"`
+	PointLoads           map[int]interface{}  `json:"point_loads"`
+	Moments              map[int]interface{}  `json:"moments"`
+	DistributedLoads     map[int]interface{}  `json:"distributed_loads"`
+	Pressures            map[int]interface{}  `json:"pressures"`
+	AreaLoads            map[int]*AreaLoad    `json:"area_loads"`
+	MemberPrestressLoads map[int]interface{}  `json:"member_prestress_loads"`
+	SelfWeight           map[int]*SelfWeight  `json:"self_weight"`
+	LoadCombinations     Combination          `json:"load_combinations"`
+	// LoadCases                map[int]interface{}  `json:"load_cases"`
+	NodalMasses              map[int]interface{} `json:"nodal_masses"`
+	NodalMassesConversionMap map[int]interface{} `json:"nodal_masses_conversion_map"`
+	SpectralLoads            map[int]interface{} `json:"spectral_loads"`
+	NotionalLoads            map[int]interface{} `json:"notional_loads"`
+	Suppress                 Suppress            `json:"suppress"`
 }
 
 const (
@@ -570,27 +569,38 @@ func NewModel() *Skyciv {
 	return &Skyciv{
 		DataVersion: DataVersion,
 		Settings: Settings{
-			Units: "imperial",
+			Units: &Units{
+				Length:           "ft",
+				SectionLength:    "in",
+				MaterialStrength: "ksi",
+				Density:          "lb/ft3",
+				Force:            "kip",
+				Moment:           "kip-ft",
+				Pressure:         "ksf",
+				Mass:             "kip",
+				Translation:      "in",
+				Stress:           "ksi",
+			},
 		},
-		Details:                  []Details{},
-		Nodes:                    make(map[int]*Node),
-		Members:                  make(map[int]*Member),
-		Plates:                   make(map[int]*Plate),
-		MeshedPlates:             make(map[int]*MeshedPlate),
-		Sections:                 make(map[int]*Section),
-		Materials:                make(map[int]*Material),
-		Supports:                 make(map[int]*Support),
-		Settlements:              make(map[int]interface{}),
-		AreaLoads:                make(map[int]*AreaLoad),
-		SelfWeight:               make(map[int]*SelfWeight),
-		Groups:                   []*Group{nil, nil},
-		PointLoads:               make(map[int]interface{}),
-		Moments:                  make(map[int]interface{}),
-		DistributedLoads:         make(map[int]interface{}),
-		Pressures:                make(map[int]interface{}),
-		MemberPrestressLoads:     make(map[int]interface{}),
-		LoadCombinations:         make(map[int]interface{}),
-		LoadCases:                make(map[int]interface{}),
+		Details:              []Details{},
+		Nodes:                make(map[int]*Node),
+		Members:              make(map[int]*Member),
+		Plates:               make(map[int]*Plate),
+		MeshedPlates:         make(map[int]*MeshedPlate),
+		Sections:             make(map[int]*Section),
+		Materials:            make(map[int]*Material),
+		Supports:             make(map[int]*Support),
+		Settlements:          make(map[int]interface{}),
+		AreaLoads:            make(map[int]*AreaLoad),
+		SelfWeight:           make(map[int]*SelfWeight),
+		Groups:               []*Group{nil, nil},
+		PointLoads:           make(map[int]interface{}),
+		Moments:              make(map[int]interface{}),
+		DistributedLoads:     make(map[int]interface{}),
+		Pressures:            make(map[int]interface{}),
+		MemberPrestressLoads: make(map[int]interface{}),
+		// LoadCombinations:         make(map[int]interface{}),
+		// LoadCases:                make(map[int]interface{}),
 		NodalMasses:              make(map[int]interface{}),
 		NodalMassesConversionMap: make(map[int]interface{}),
 		SpectralLoads:            make(map[int]interface{}),
@@ -691,6 +701,12 @@ func (m *Skyciv) FindNearestNode(x, y, z float64) (minNode *Node) {
 }
 
 func (m *Skyciv) FindNearestMemberAndSplitAt(x, y, z float64) (*Node, error) {
+	// if a node is colocated just return it
+	if n := m.FindNearestNode(x, y, z); n != nil && n.Colocated(x, y, z) {
+		return n, nil
+	}
+
+	// otherwise find the nearest member
 	mem := m.FindNearestMember(x, y, z)
 	if mem == nil {
 		return nil, fmt.Errorf("could not find a nearest member to %f,%f,%f", x, y, z)
@@ -708,7 +724,7 @@ func (m *Skyciv) FindNearestMember(x, y, z float64) *Member {
 	for _, mem := range m.Members {
 		t, d := mem.distanceTo(x, y, z)
 
-		fmt.Fprintf(os.Stderr, "t, d: %f, %f\n", t, d)
+		// fmt.Fprintf(os.Stderr, "t, d: %f, %f\n", t, d)
 
 		if t < 0 || t > 1 {
 			continue
@@ -718,7 +734,7 @@ func (m *Skyciv) FindNearestMember(x, y, z float64) *Member {
 			minMember = mem
 		}
 	}
-	fmt.Fprintf(os.Stderr, "min: %f %d\n", minDistance, minMember.Id)
+	// fmt.Fprintf(os.Stderr, "min: %f %d\n", minDistance, minMember.Id)
 	return minMember
 }
 
