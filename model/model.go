@@ -652,7 +652,10 @@ func (m *Skyciv) NewSelfWeight() *SelfWeight {
 		sw.Y = -1
 	case "Z":
 		sw.Z = -1
+	default:
+		sw.Y = -1
 	}
+	sw.LoadGroup = "SW1" // skyciv always assumes self weight is SW1 I think
 	m.SelfWeight[sw.Id] = sw
 	return sw
 }

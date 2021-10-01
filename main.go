@@ -23,10 +23,29 @@ var (
 	RoofDeadLoad = 0.02 // ksf == 20 psf
 	WindLiveLoad = 0.
 
-	AirDensity = 0.000075     // kip/ft^3 = 0.075 lb/ft^3 = 1.2 kg/m^3
-	WindSpeed  = 177.         // ft/s = 120 mph = 54 m/s
-	Gravity    = 32.174048554 // ft/s^2 = 9.80665 m/s^2
+	AirDensity = 0.000075 // kip/ft^3 = 0.075 lb/ft^3 = 1.2 kg/m^3
+	WindSpeed  = 177.     // ft/s = 120 mph = 54 m/s
 )
+
+const (
+	Gravity = 32.174048554 // ft/s^2 = 9.80665 m/s^2
+)
+
+type SimpleFrame struct {
+	Width     float64
+	Height    float64
+	Length    float64
+	TieHeight float64
+	BraceRise float64
+	RoofRise  float64
+	RoofRun   float64
+	Bents     int
+
+	RoofSnowLoad float64
+	RoofLiveLoad float64
+	RoofDeadLoad float64
+	WindLiveLoad float64
+}
 
 func WindPressure(airDensity, windSpeed float64) float64 {
 	return 0.5 * airDensity / Gravity * windSpeed * windSpeed
@@ -223,12 +242,15 @@ func main() {
 	redPineGreen.YieldStrength = 0.26   // ksi
 	redPineGreen.UltimateStrength = 0.3 // ksi
 
-	redPine7x9 := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
-	redPine4x8 := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "4 x 8")
+	post := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
+	tie := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
+	rafter := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
+	brace := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "4 x 8")
+	plate := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
 
-	bent(m, redPine7x9, redPine7x9, redPine7x9, redPine4x8, redPine7x9, 0, Length/2)
-	bent(m, redPine7x9, redPine7x9, redPine7x9, redPine4x8, redPine7x9, Length/2, Length/2)
-	bent(m, redPine7x9, redPine7x9, redPine7x9, redPine4x8, redPine7x9, Length, Length/2)
+	for z := 0.; z <= Length; z += Length / 2 {
+		bent(m, post, tie, rafter, brace, plate, z, Length/2)
+	}
 
 	roofAreaLoad(m, -RoofSnowLoad, "snow")
 	roofAreaLoad(m, -RoofDeadLoad, "dead")
