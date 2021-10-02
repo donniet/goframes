@@ -137,6 +137,10 @@ func Distance(A, B *Node) float64 {
 	return math.Sqrt((A.X-B.X)*(A.X-B.X) + (A.Y-B.Y)*(A.Y-B.Y) + (A.Z-B.Z)*(A.Z-B.Z))
 }
 
+func (m *Member) Length() float64 {
+	return Distance(m.A(), m.B())
+}
+
 func (m *Member) distanceTo(x, y, z float64) (t float64, d float64) {
 	A := m.A().ToVector()
 	B := m.B().ToVector()
@@ -158,6 +162,44 @@ func (m *Member) A() *Node {
 }
 func (m *Member) B() *Node {
 	return m.model.Nodes[m.NodeB]
+}
+
+// brace the node against members a and b using the section sec at distance units from the node
+func (m *Member) Brace(against *Member, sec *Section, distance float64) (*Member, error) {
+	if m.Length() < distance || against.Length() < distance {
+		return nil, fmt.Errorf("at least one member is less than %f", distance)
+	}
+	var inv0, inv1 float64
+
+	if m.A() == against.A() {
+		inv0, inv1 = 1., 1.
+	} else if m.A() == against.B() {
+		inv0, inv1 = 1., -1.
+	} else if m.B() == against.A() {
+		inv0, inv1 = -1., 1.
+	} else if m.B() == against.B() {
+		inv0, inv1 = -1., -1.
+	} else {
+		return nil, fmt.Errorf("members do not meet at a node")
+	}
+
+	if a, rem0, err := m.Split(inv0 * distance); err != nil {
+		return nil, err
+	} else if b, rem1, err := against.Split(inv1 * distance); err != nil {
+		return nil, err
+	} else {
+		brace := sec.NewContinuousMemberBetweenNodes(a, b)
+
+		// swap the members since we assume nothing will be attached between a brace and it's members
+		if inv0 > 0 {
+			rem0.NodeA, rem0.NodeB, m.NodeA, m.NodeB = m.NodeA, m.NodeB, rem0.NodeA, rem0.NodeB
+		}
+		if inv1 > 0 {
+			rem1.NodeA, rem1.NodeB, against.NodeA, against.NodeB = against.NodeA, against.NodeB, rem1.NodeA, rem1.NodeB
+		}
+
+		return brace, nil
+	}
 }
 
 var (
