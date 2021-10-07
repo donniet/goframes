@@ -7,3 +7,7 @@ const (
 func WindPressure(airDensity, windSpeed float64) float64 {
 	return 0.5 * airDensity / Gravity * windSpeed * windSpeed
 }
+
+type Frame interface {
+	Build()
+}

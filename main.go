@@ -32,15 +32,31 @@ const (
 )
 
 func main() {
-	f := &frames.SimpleFrame{
-		Width:        Width,
-		Height:       Height,
-		Length:       Length,
-		TieHeight:    TieHeight,
-		BraceRise:    BraceRise,
-		RoofRise:     RoofRise,
-		RoofRun:      RoofRun,
-		Bents:        Bents,
+	// f := &frames.SimpleFrame{
+	// 	Width:        Width,
+	// 	Height:       Height,
+	// 	Length:       Length,
+	// 	TieHeight:    TieHeight,
+	// 	BraceRise:    BraceRise,
+	// 	RoofRise:     RoofRise,
+	// 	RoofRun:      RoofRun,
+	// 	Bents:        Bents,
+	// 	RoofSnowLoad: RoofSnowLoad,
+	// 	RoofLiveLoad: RoofLiveLoad,
+	// 	RoofDeadLoad: RoofDeadLoad,
+	// 	WindSpeed:    WindSpeed,
+	// 	AirDensity:   AirDensity,
+	// }
+	// f.Build()
+
+	f := &frames.Yurt{
+		Diameter:       24,
+		Height:         10,
+		RoofRise:       4,
+		RoofRun:        12,
+		MaxPostSpacing: 12,
+		BraceRise:      3,
+
 		RoofSnowLoad: RoofSnowLoad,
 		RoofLiveLoad: RoofLiveLoad,
 		RoofDeadLoad: RoofDeadLoad,
