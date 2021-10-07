@@ -68,6 +68,20 @@ type Vector struct {
 	X, Y, Z float64
 }
 
+func (v *Vector) Normalize() {
+	l := v.Length()
+	v.X /= l
+	v.Y /= l
+	v.Z /= l
+}
+func (v Vector) Sum(w Vector) Vector {
+	return Vector{
+		X: v.X + w.X,
+		Y: v.Y + w.Y,
+		Z: v.Z + w.Z,
+	}
+}
+
 func (v Vector) Length() float64 {
 	return math.Sqrt(v.X*v.X + v.Y*v.Y + v.Z*v.Z)
 }
@@ -83,6 +97,14 @@ func (A Vector) Diff(B Vector) (v Vector) {
 	return
 }
 
+func (v Vector) Scale(s float64) Vector {
+	return Vector{
+		X: s * v.X,
+		Y: s * v.Y,
+		Z: s * v.Z,
+	}
+}
+
 type Node struct {
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
@@ -90,6 +112,10 @@ type Node struct {
 	Id      int     `json:"-"`
 	model   *Skyciv
 	support *Support
+}
+
+func Distance(a, b *Node) float64 {
+	return a.ToVector().Diff(b.ToVector()).Length()
 }
 
 func (n *Node) ToVector() (v Vector) {
@@ -114,6 +140,158 @@ func (n *Node) FixedSupport() {
 	n.model.Supports[s.Id] = s
 }
 
+type ContinuousMember struct {
+	nodes   []*Node
+	section *Section
+	// TODO: add offsets and end fixity's
+	model *Skyciv
+}
+
+func (mem *ContinuousMember) Begin() *Node {
+	return mem.nodes[0]
+}
+func (mem *ContinuousMember) End() *Node {
+	return mem.nodes[len(mem.nodes)-1]
+}
+
+func (mem *ContinuousMember) Split(distance float64) (*Node, error) {
+	rem := distance
+	last := mem.nodes[0]
+	var next *Node
+	i := 1
+	d := 0.
+	for ; i < len(mem.nodes); i++ {
+		next = mem.nodes[i]
+		d = Distance(last, next)
+		if rem < d {
+			break
+		}
+		rem -= d
+		last, next = next, nil
+	}
+
+	if i >= len(mem.nodes) {
+		return nil, fmt.Errorf("distance %f greater than length of continuous member", distance)
+	}
+
+	s := mem.model.NewNodeInterpolate(last, next, rem/d)
+	mem.nodes = append(mem.nodes[:i+1], mem.nodes[i:]...)
+	mem.nodes[i] = s
+	return s, nil
+}
+
+func (mem *ContinuousMember) Length() float64 {
+	return Distance(mem.Begin(), mem.End())
+}
+
+func (mem *ContinuousMember) SplitFrom(n *Node, distance float64) (*Node, error) {
+	// is n a node in m?
+	found := false
+	for _, p := range mem.nodes {
+		if p == n {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return nil, fmt.Errorf("node not in member")
+	}
+
+	var dir Vector
+
+	// split toward end
+	if distance > 0 {
+		if n == mem.End() {
+			return nil, fmt.Errorf("cannot split positive from the end")
+		}
+		dir = mem.End().ToVector().Diff(n.ToVector())
+		dir.Normalize()
+		dir = dir.Scale(distance)
+
+	} else {
+		if n == mem.Begin() {
+			return nil, fmt.Errorf("cannot split negative from the begin")
+		}
+
+		dir = mem.Begin().ToVector().Diff(n.ToVector())
+		dir.Normalize()
+		dir = dir.Scale(-distance)
+	}
+	return mem.SplitAt(n.X+dir.X, n.Y+dir.Y, n.Z+dir.Z)
+}
+
+func (mem *ContinuousMember) DistanceTo(x, y, z float64) (t float64, d float64) {
+	A := mem.Begin().ToVector()
+	B := mem.End().ToVector()
+	C := Vector{x, y, z}
+
+	ab := B.Diff(A).Length()
+	ac := C.Diff(A).Length()
+	// bc := C.Diff(A).Length()
+	CA := C.Diff(A)
+	BA := B.Diff(A)
+
+	t = CA.Dot(BA) / ab / ab
+	d = (ac*ac*ab*ab - CA.Dot(BA)*CA.Dot(BA)) / ab / ab
+	return
+}
+
+func (mem *ContinuousMember) SplitAt(x, y, z float64) (*Node, error) {
+	A := mem.nodes[0]
+	B := mem.nodes[len(mem.nodes)-1]
+
+	t, _ := mem.DistanceTo(x, y, z)
+
+	if t < 0 || t > 1 {
+		return nil, fmt.Errorf("cannot split a node outside of it's length")
+	}
+
+	// adjust to the real splitting spot
+	x = A.X + (B.X-A.X)*t
+	y = A.Y + (B.Y-A.Y)*t
+	z = A.Z + (B.Z-A.Z)*t
+
+	for _, n := range mem.nodes {
+		if n.Colocated(x, y, z) {
+			return n, nil
+		}
+	}
+
+	return mem.Split(t * mem.Length())
+}
+
+type ContinuousMemberList struct {
+	members []*ContinuousMember
+}
+
+func (l *ContinuousMemberList) Append(c *ContinuousMember) {
+	l.members = append(l.members, c)
+}
+
+// TODO: allow for offsets and different fixities
+func (l *ContinuousMemberList) MarshalJSON() ([]byte, error) {
+	mems := make(map[int]*Member)
+	k := 1
+
+	for _, c := range l.members {
+		for i := 1; i < len(c.nodes); i++ {
+			A, B := c.nodes[i-1], c.nodes[i]
+			mems[k] = &Member{
+				Type:  "normal_continuous",
+				NodeA: A.Id, NodeB: B.Id,
+				SectionId: c.section.Id,
+				FixityA:   "FFFFFF",
+				FixityB:   "FFFFFF",
+				Id:        k,
+			}
+			k++
+		}
+	}
+
+	return json.Marshal(mems)
+}
+
 type Member struct {
 	Type          string  `json:"type"`
 	CableLength   *int    `json:"cable_length"`
@@ -130,158 +308,208 @@ type Member struct {
 	OffsetBy      float64 `json:"offset_By,string"`
 	OffsetBz      float64 `json:"offset_Bz,string"`
 	Id            int     `json:"-"`
-	model         *Skyciv
 }
 
-func Distance(A, B *Node) float64 {
-	return math.Sqrt((A.X-B.X)*(A.X-B.X) + (A.Y-B.Y)*(A.Y-B.Y) + (A.Z-B.Z)*(A.Z-B.Z))
-}
+// func Distance(A, B *Node) float64 {
+// 	return math.Sqrt((A.X-B.X)*(A.X-B.X) + (A.Y-B.Y)*(A.Y-B.Y) + (A.Z-B.Z)*(A.Z-B.Z))
+// }
 
-func (m *Member) Length() float64 {
-	return Distance(m.A(), m.B())
-}
+// func (m *Member) Length() float64 {
+// 	return Distance(m.A(), m.B())
+// }
 
-func (m *Member) distanceTo(x, y, z float64) (t float64, d float64) {
-	A := m.A().ToVector()
-	B := m.B().ToVector()
-	C := Vector{x, y, z}
+// func (m *Member) distanceTo(x, y, z float64) (t float64, d float64) {
+// 	A := m.A().ToVector()
+// 	B := m.B().ToVector()
+// 	C := Vector{x, y, z}
 
-	ab := B.Diff(A).Length()
-	ac := C.Diff(A).Length()
-	// bc := C.Diff(A).Length()
-	CA := C.Diff(A)
-	BA := B.Diff(A)
+// 	ab := B.Diff(A).Length()
+// 	ac := C.Diff(A).Length()
+// 	// bc := C.Diff(A).Length()
+// 	CA := C.Diff(A)
+// 	BA := B.Diff(A)
 
-	t = CA.Dot(BA) / ab / ab
-	d = (ac*ac*ab*ab - CA.Dot(BA)*CA.Dot(BA)) / ab / ab
-	return
-}
+// 	t = CA.Dot(BA) / ab / ab
+// 	d = (ac*ac*ab*ab - CA.Dot(BA)*CA.Dot(BA)) / ab / ab
+// 	return
+// }
 
-func (m *Member) A() *Node {
-	return m.model.Nodes[m.NodeA]
-}
-func (m *Member) B() *Node {
-	return m.model.Nodes[m.NodeB]
+// func (m *Member) A() *Node {
+// 	return m.model.Nodes[m.NodeA]
+// }
+// func (m *Member) B() *Node {
+// 	return m.model.Nodes[m.NodeB]
+// }
+
+type Quadrant int
+
+const (
+	QuadrantPP = 0x0
+	QuadrantPN = 0x1
+	QuadrantNN = 0x3
+	QuadrantNP = 0x2
+)
+
+func (q Quadrant) FirstPositive() bool  { return q&0x2 == 0 }
+func (q Quadrant) SecondPositive() bool { return q&0x1 == 0 }
+
+func (m *ContinuousMember) Brace(against *ContinuousMember, sec *Section, distance float64, quadrant Quadrant) (*ContinuousMember, error) {
+	// first find the node where they meet
+	var inter *Node
+searchLoop:
+	for _, n := range m.nodes {
+		for _, p := range against.nodes {
+			if n == p {
+				inter = n
+				break searchLoop
+			}
+		}
+	}
+
+	if inter == nil {
+		return nil, fmt.Errorf("members do not share a node")
+	}
+
+	d0, d1 := distance, distance
+	if !quadrant.FirstPositive() {
+		d0 = -d0
+	}
+	if !quadrant.SecondPositive() {
+		d1 = -d1
+	}
+
+	if n0, err := m.SplitFrom(inter, d0); err != nil {
+		return nil, err
+	} else if n1, err := against.SplitFrom(inter, d1); err != nil {
+		return nil, err
+	} else {
+		return sec.NewContinuousMemberBetweenNodes(n0, n1), nil
+	}
 }
 
 // brace the node against members a and b using the section sec at distance units from the node
-func (m *Member) Brace(against *Member, sec *Section, distance float64) (*Member, error) {
-	if m.Length() < distance || against.Length() < distance {
-		return nil, fmt.Errorf("at least one member is less than %f", distance)
-	}
-	var inv0, inv1 float64
+// func (m *Member) Brace(against *Member, sec *Section, distance float64) (*Member, error) {
+// 	var inv0, inv1 float64
 
-	if m.A() == against.A() {
-		inv0, inv1 = 1., 1.
-	} else if m.A() == against.B() {
-		inv0, inv1 = 1., -1.
-	} else if m.B() == against.A() {
-		inv0, inv1 = -1., 1.
-	} else if m.B() == against.B() {
-		inv0, inv1 = -1., -1.
-	} else {
-		return nil, fmt.Errorf("members do not meet at a node")
-	}
+// 	if m.A() == against.A() {
+// 		inv0, inv1 = 1., 1.
+// 	} else if m.A() == against.B() {
+// 		inv0, inv1 = 1., -1.
+// 	} else if m.B() == against.A() {
+// 		inv0, inv1 = -1., 1.
+// 	} else if m.B() == against.B() {
+// 		inv0, inv1 = -1., -1.
+// 	} else {
+// 		return nil, fmt.Errorf("members do not meet at a node")
+// 	}
 
-	if a, rem0, err := m.Split(inv0 * distance); err != nil {
-		return nil, err
-	} else if b, rem1, err := against.Split(inv1 * distance); err != nil {
-		return nil, err
-	} else {
-		brace := sec.NewContinuousMemberBetweenNodes(a, b)
+// 	if m.Length() < distance || against.Length() < distance {
+// 		return nil, fmt.Errorf("at least one member is less than %f", distance)
+// 	}
 
-		// swap the members since we assume nothing will be attached between a brace and it's members
-		if inv0 > 0 {
-			rem0.NodeA, rem0.NodeB, m.NodeA, m.NodeB = m.NodeA, m.NodeB, rem0.NodeA, rem0.NodeB
-		}
-		if inv1 > 0 {
-			rem1.NodeA, rem1.NodeB, against.NodeA, against.NodeB = against.NodeA, against.NodeB, rem1.NodeA, rem1.NodeB
-		}
+// 	if a, rem0, err := m.Split(inv0 * distance); err != nil {
+// 		return nil, err
+// 	} else if b, rem1, err := against.Split(inv1 * distance); err != nil {
+// 		return nil, err
+// 	} else {
+// 		brace := sec.NewContinuousMemberBetweenNodes(a, b)
 
-		return brace, nil
-	}
-}
+// 		// swap the members since we assume nothing will be attached between a brace and it's members
+// 		if inv0 > 0 {
+// 			rem0.NodeA, rem0.NodeB, m.NodeA, m.NodeB = m.NodeA, m.NodeB, rem0.NodeA, rem0.NodeB
+// 		}
+// 		if inv1 > 0 {
+// 			rem1.NodeA, rem1.NodeB, against.NodeA, against.NodeB = against.NodeA, against.NodeB, rem1.NodeA, rem1.NodeB
+// 		}
+
+// 		return brace, nil
+// 	}
+// }
 
 var (
 	ErrColocated = errors.New("Colocated with Node")
 )
 
 // splits the member as close as it can to the specified point
-func (m *Member) SplitAt(x, y, z float64) (*Node, *Member, error) {
-	A := m.A()
-	B := m.B()
-	t, _ := m.distanceTo(x, y, z)
+// func (m *Member) SplitAt(x, y, z float64) (*Node, *Member, error) {
+// 	A := m.A()
+// 	B := m.B()
+// 	t, _ := m.distanceTo(x, y, z)
 
-	if t < 0 || t > 1 {
-		return nil, nil, fmt.Errorf("cannot split a node outside of it's length")
-	}
+// 	if t < 0 || t > 1 {
+// 		return nil, nil, fmt.Errorf("cannot split a node outside of it's length")
+// 	}
 
-	// adjust to the real splitting spot
-	x = A.X + (B.X-A.X)*t
-	y = A.Y + (B.Y-A.Y)*t
-	z = A.Z + (B.Z-A.Z)*t
+// 	// adjust to the real splitting spot
+// 	x = A.X + (B.X-A.X)*t
+// 	y = A.Y + (B.Y-A.Y)*t
+// 	z = A.Z + (B.Z-A.Z)*t
 
-	if A.Colocated(x, y, z) {
-		return A, nil, ErrColocated
-	} else if B.Colocated(x, y, z) {
-		return B, nil, ErrColocated
-	}
+// 	if A.Colocated(x, y, z) {
+// 		return A, nil, ErrColocated
+// 	} else if B.Colocated(x, y, z) {
+// 		return B, nil, ErrColocated
+// 	}
 
-	C := m.model.NewNode(x, y, z)
-	m2 := &Member{}
-	*m2 = *m // duplicate m
-	m.NodeB = C.Id
-	m2.NodeA = C.Id
-	m2.Id = len(m.model.Members) + 1
-	// TODO: what to do about offsets??
-	m.model.Members[m2.Id] = m2
+// 	C := m.model.NewNode(x, y, z)
+// 	m2 := &Member{}
+// 	*m2 = *m // duplicate m
+// 	m.NodeB = C.Id
+// 	m2.NodeA = C.Id
+// 	m.parent.insertSplitAfter(m, m2)
 
-	return C, m2, nil
-}
+// 	m2.Id = len(m.model.Members) + 1
+// 	// TODO: what to do about offsets??
+// 	m.model.Members[m2.Id] = m2
+
+// 	return C, m2, nil
+// }
 
 // negative numbers start from B
-func (m *Member) Split(distance float64) (*Node, *Member, error) {
-	A := m.A()
-	B := m.B()
+// func (m *Member) Split(distance float64) (*Node, *Member, error) {
+// 	A := m.A()
+// 	B := m.B()
 
-	length := Distance(A, B)
-	if distance < -length || distance > length {
-		return nil, nil, fmt.Errorf("distance %f is less than 0 or greater than member length %f", distance, length)
-	}
+// 	length := Distance(A, B)
+// 	if distance < -length || distance > length {
+// 		return nil, nil, fmt.Errorf("distance %f is less than 0 or greater than member length %f", distance, length)
+// 	}
 
-	distance /= length // as a percentage
-	var x, y, z float64
+// 	distance /= length // as a percentage
+// 	var x, y, z float64
 
-	if distance >= 0 {
-		x = (B.X-A.X)*distance + A.X
-		y = (B.Y-A.Y)*distance + A.Y
-		z = (B.Z-A.Z)*distance + A.Z
-	} else {
-		x = (B.X-A.X)*distance + B.X
-		y = (B.Y-A.Y)*distance + B.Y
-		z = (B.Z-A.Z)*distance + B.Z
-	}
+// 	if distance >= 0 {
+// 		x = (B.X-A.X)*distance + A.X
+// 		y = (B.Y-A.Y)*distance + A.Y
+// 		z = (B.Z-A.Z)*distance + A.Z
+// 	} else {
+// 		x = (B.X-A.X)*distance + B.X
+// 		y = (B.Y-A.Y)*distance + B.Y
+// 		z = (B.Z-A.Z)*distance + B.Z
+// 	}
 
-	if A.Colocated(x, y, z) || B.Colocated(x, y, z) {
-		return nil, nil, fmt.Errorf("distance %f is too close to zero or length %f", distance*length, length)
-	}
+// 	if A.Colocated(x, y, z) || B.Colocated(x, y, z) {
+// 		return nil, nil, fmt.Errorf("distance %f is too close to zero or length %f", distance*length, length)
+// 	}
 
-	C := m.model.NewNode(x, y, z)
-	m2 := &Member{}
-	*m2 = *m // duplicate m
-	if distance >= 0 {
-		m.NodeB = C.Id
-		m2.NodeA = C.Id
-	} else {
-		m.NodeA = C.Id
-		m2.NodeB = C.Id
-	}
-	m2.Id = len(m.model.Members) + 1
-	// TODO: what to do about offsets??
-	m.model.Members[m2.Id] = m2
+// 	C := m.model.NewNode(x, y, z)
+// 	m2 := &Member{}
+// 	*m2 = *m // duplicate m
+// 	if distance >= 0 {
+// 		m.NodeB = C.Id
+// 		m2.NodeA = C.Id
+// 		m.parent.insertSplitAfter(m, m2)
+// 	} else {
+// 		m.NodeA = C.Id
+// 		m2.NodeB = C.Id
+// 		m.parent.insertSplitBefore(m, m2)
+// 	}
+// 	m2.Id = len(m.model.Members) + 1
+// 	// TODO: what to do about offsets??
+// 	m.model.Members[m2.Id] = m2
 
-	return C, m2, nil
-}
+// 	return C, m2, nil
+// }
 
 type Plate struct{}
 type MeshedPlate struct{}
@@ -384,6 +612,7 @@ func (m *Material) NewSectionFromLibrary(path ...string) *Section {
 	return s
 }
 
+// TODO: This function doesn't work with skyciv.  Use the library section instead
 func (m *Material) NewRectangularSection(breadth, depth float64) *Section {
 	s := &Section{
 		MaterialId: m.Id,
@@ -458,24 +687,40 @@ type Section struct {
 	model       *Skyciv
 }
 
-func (s *Section) NewContinuousMember(x0, y0, z0, x1, y1, z1 float64) *Member {
+func (s *Section) NewContinuousMember(x0, y0, z0, x1, y1, z1 float64) *ContinuousMember {
 	n0 := s.model.NewNode(x0, y0, z0)
 	n1 := s.model.NewNode(x1, y1, z1)
 	return s.NewContinuousMemberBetweenNodes(n0, n1)
 }
 
-func (s *Section) NewContinuousMemberBetweenNodes(n0, n1 *Node) *Member {
-	m := &Member{
-		Type:  "normal_continuous",
-		NodeA: n0.Id, NodeB: n1.Id,
-		FixityA: "FFFFFF", FixityB: "FFFFFF",
-		SectionId: s.Id,
-		Id:        len(s.model.Members) + 1,
-		model:     s.model,
+func (s *Section) NewContinuousMemberBetweenNodes(n0, n1 *Node) *ContinuousMember {
+	c := &ContinuousMember{
+		nodes:   []*Node{n0, n1},
+		model:   s.model,
+		section: s,
 	}
-	s.model.Members[m.Id] = m
-	return m
+	s.model.ContinuousMembers.Append(c)
+
+	return c
 }
+
+// func (s *Section) NewContinuousMemberBetweenNodes(n0, n1 *Node) *Member {
+// 	m := &Member{
+// 		Type:  "normal_continuous",
+// 		NodeA: n0.Id, NodeB: n1.Id,
+// 		FixityA: "FFFFFF", FixityB: "FFFFFF",
+// 		SectionId: s.Id,
+// 		Id:        len(s.model.Members) + 1,
+// 		model:     s.model,
+// 		parent: &MemberParent{
+// 			a: n0,
+// 			b: n1,
+// 		},
+// 	}
+// 	m.parent.children = []*Member{m}
+// 	s.model.Members[m.Id] = m
+// 	return m
+// }
 
 type Support struct {
 	DirectionCode string  `json:"direction_code"`
@@ -573,11 +818,12 @@ func (s *Suppress) MarshalJSON() ([]byte, error) {
 }
 
 type Skyciv struct {
-	DataVersion          int                  `json:"dataVersion"`
-	Settings             Settings             `json:"settings"`
-	Details              []Details            `json:"details"`
-	Nodes                map[int]*Node        `json:"nodes"`
-	Members              map[int]*Member      `json:"members"`
+	DataVersion int           `json:"dataVersion"`
+	Settings    Settings      `json:"settings"`
+	Details     []Details     `json:"details"`
+	Nodes       map[int]*Node `json:"nodes"`
+	// Members              map[int]*Member      `json:"members"`
+	ContinuousMembers    ContinuousMemberList `json:"members"`
 	Plates               map[int]*Plate       `json:"plates"`
 	MeshedPlates         map[int]*MeshedPlate `json:"meshed_plates"`
 	Sections             map[int]*Section     `json:"sections"`
@@ -624,9 +870,9 @@ func NewModel() *Skyciv {
 				Stress:           "ksi",
 			},
 		},
-		Details:              []Details{},
-		Nodes:                make(map[int]*Node),
-		Members:              make(map[int]*Member),
+		Details: []Details{},
+		Nodes:   make(map[int]*Node),
+		// Members:              make(map[int]*Member),
 		Plates:               make(map[int]*Plate),
 		MeshedPlates:         make(map[int]*MeshedPlate),
 		Sections:             make(map[int]*Section),
@@ -745,55 +991,70 @@ func (m *Skyciv) FindNearestNode(x, y, z float64) (minNode *Node) {
 	return
 }
 
-func (m *Skyciv) FindNearestMemberAndSplitAt(x, y, z float64) (*Node, error) {
-	// if a node is colocated just return it
-	if n := m.FindNearestNode(x, y, z); n != nil && n.Colocated(x, y, z) {
-		return n, nil
-	}
+// func (m *Skyciv) FindNearestMemberAndSplitAt(x, y, z float64) (*Node, error) {
+// 	// if a node is colocated just return it
+// 	if n := m.FindNearestNode(x, y, z); n != nil && n.Colocated(x, y, z) {
+// 		return n, nil
+// 	}
 
-	// otherwise find the nearest member
-	mem := m.FindNearestMember(x, y, z)
-	if mem == nil {
-		return nil, fmt.Errorf("could not find a nearest member to %f,%f,%f", x, y, z)
-	}
-	n, _, err := mem.SplitAt(x, y, z)
-	if err == ErrColocated {
-		return n, nil
-	}
-	return n, err
-}
+// 	// otherwise find the nearest member
+// 	mem := m.FindNearestMember(x, y, z)
+// 	if mem == nil {
+// 		return nil, fmt.Errorf("could not find a nearest member to %f,%f,%f", x, y, z)
+// 	}
+// 	n, _, err := mem.SplitAt(x, y, z)
+// 	if err == ErrColocated {
+// 		return n, nil
+// 	}
+// 	return n, err
+// }
 
-func (m *Skyciv) FindNearestMember(x, y, z float64) *Member {
-	minDistance := math.MaxFloat64
-	var minMember *Member
-	for _, mem := range m.Members {
-		t, d := mem.distanceTo(x, y, z)
+// func (m *Skyciv) FindNearestMember(x, y, z float64) *Member {
+// 	minDistance := math.MaxFloat64
+// 	var minMember *Member
+// 	for _, mem := range m.Members {
+// 		t, d := mem.distanceTo(x, y, z)
 
-		// fmt.Fprintf(os.Stderr, "t, d: %f, %f\n", t, d)
+// 		// fmt.Fprintf(os.Stderr, "t, d: %f, %f\n", t, d)
 
-		if t < 0 || t > 1 {
-			continue
+// 		if t < 0 || t > 1 {
+// 			continue
+// 		}
+// 		if d < minDistance {
+// 			minDistance = d
+// 			minMember = mem
+// 		}
+// 	}
+// 	// fmt.Fprintf(os.Stderr, "min: %f %d\n", minDistance, minMember.Id)
+// 	return minMember
+// }
+
+func (m *Skyciv) NewNodeInterpolate(a, b *Node, t float64) *Node {
+	x := (b.X-a.X)*t + a.X
+	y := (b.Y-a.Y)*t + a.Y
+	z := (b.Z-a.Z)*t + a.Z
+
+	for _, n := range m.Nodes {
+		if n.Colocated(x, y, z) {
+			return n
 		}
-		if d < minDistance {
-			minDistance = d
-			minMember = mem
-		}
 	}
-	// fmt.Fprintf(os.Stderr, "min: %f %d\n", minDistance, minMember.Id)
-	return minMember
+
+	n := &Node{
+		X: x, Y: y, Z: z,
+		model: m,
+		Id:    len(m.Nodes) + 1,
+	}
+	m.Nodes[n.Id] = n
+	return n
 }
 
 func (m *Skyciv) NewNode(x, y, z float64) *Node {
 	var found *Node
 	for _, n := range m.Nodes {
 		if n.Colocated(x, y, z) {
-			found = n
-			break
+			return n
 		}
-	}
-
-	if found != nil {
-		return found
 	}
 
 	found = &Node{X: x, Y: y, Z: z, Id: len(m.Nodes) + 1, model: m}

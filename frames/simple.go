@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/donniet/goframes/materials"
 	"github.com/donniet/goframes/model"
-)
-
-const (
-	Gravity = 32.174048554
 )
 
 type SimpleFrame struct {
@@ -28,6 +25,8 @@ type SimpleFrame struct {
 	// WindLiveLoad float64
 	WindSpeed  float64
 	AirDensity float64
+
+	posts []*model.ContinuousMember
 }
 
 func (f *SimpleFrame) Model() *model.Skyciv {
@@ -37,19 +36,13 @@ func (f *SimpleFrame) Model() *model.Skyciv {
 func (f *SimpleFrame) Build() {
 	f.m = model.NewModel()
 
-	redPineGreen := f.m.NewMaterial("Red Pine (green)")
-	redPineGreen.Class = model.MaterialClassWood
-	redPineGreen.ElasticityModulus = 1280 // ksi
-	redPineGreen.Density = 25             // lb/ft^3
-	redPineGreen.PoissonsRatio = 0.27
-	redPineGreen.YieldStrength = 0.26   // ksi
-	redPineGreen.UltimateStrength = 0.3 // ksi
+	mats := materials.Create(f.m)
 
-	post := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
-	tie := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
-	rafter := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
-	brace := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "4 x 8")
-	plate := redPineGreen.NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
+	post := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
+	tie := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
+	rafter := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
+	brace := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "4 x 8")
+	plate := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
 
 	for z := 0.; z <= f.Length; z += f.Length / 2 {
 		f.bent(post, tie, rafter, brace, plate, z, f.Length/2)
@@ -76,10 +69,6 @@ func (f *SimpleFrame) Build() {
 		{Name: "ULS: 6. 0.9D + W", Dead: 0.9, Wind: 1},
 	}
 
-}
-
-func WindPressure(airDensity, windSpeed float64) float64 {
-	return 0.5 * airDensity / Gravity * windSpeed * windSpeed
 }
 
 func (f *SimpleFrame) windAreaLoad(windSpeed float64, loadGroup string) {
@@ -171,99 +160,71 @@ func (f *SimpleFrame) roofAreaLoad(magnitude float64, loadGroup string) {
 }
 
 func (f *SimpleFrame) bent(post, tie, rafter, brace, plate *model.Section, z, betweenBents float64) {
-	first := len(f.m.Nodes) == 0
+	first := len(f.posts) == 0
 
 	post00 := post.NewContinuousMember(-f.Width/2, 0, z, -f.Width/2, f.Height, z)
 	post01 := post.NewContinuousMember(f.Width/2, 0, z, f.Width/2, f.Height, z)
 
-	topA0 := post00.B()
-	topA1 := post01.B()
-
-	post00.A().FixedSupport()
-	post01.A().FixedSupport()
+	post00.Begin().FixedSupport()
+	post01.Begin().FixedSupport()
 
 	rooftop := f.m.NewNode(0, f.Height+f.Width/2*f.RoofRise/f.RoofRun, z)
-	rafter.NewContinuousMemberBetweenNodes(post00.B(), rooftop)
-	rafter.NewContinuousMemberBetweenNodes(post01.B(), rooftop)
+	rafter.NewContinuousMemberBetweenNodes(post00.End(), rooftop)
+	rafter.NewContinuousMemberBetweenNodes(post01.End(), rooftop)
 
-	var tieBeam *model.Member
+	var tieBeam *model.ContinuousMember
 
-	if tieNode0, _, err := post00.Split(f.TieHeight); err != nil {
-		fmt.Fprintf(os.Stderr, "error splitting post for tie beam: %e\n", err)
+	if tieNode0, err := post00.Split(f.TieHeight); err != nil {
+		fmt.Fprintf(os.Stderr, "error splitting post for tie beam: %v\n", err)
 		return
-	} else if tieNode1, _, err := post01.Split(f.TieHeight); err != nil {
-		fmt.Fprintf(os.Stderr, "error splitting post for tie beam: %e\n", err)
+	} else if tieNode1, err := post01.Split(f.TieHeight); err != nil {
+		fmt.Fprintf(os.Stderr, "error splitting post for tie beam: %v\n", err)
 		return
 	} else {
 		tieBeam = tie.NewContinuousMemberBetweenNodes(tieNode0, tieNode1)
 	}
 
 	// add braces
-	if _, err := post00.Brace(tieBeam, brace, f.BraceRise); err != nil {
+	if _, err := post00.Brace(tieBeam, brace, f.BraceRise, model.QuadrantNP); err != nil {
 		panic(err)
 	}
-	if _, err := post01.Brace(tieBeam, brace, f.BraceRise); err != nil {
+	if _, err := post01.Brace(tieBeam, brace, f.BraceRise, model.QuadrantNN); err != nil {
 		panic(err)
 	}
-	// if postBrace0, _, err := post00.Split(-f.BraceRise); err != nil {
-	// 	panic(err)
-	// } else if postBrace1, _, err := post01.Split(-f.BraceRise); err != nil {
-	// 	panic(err)
-	// } else if tieBrace0, tieBeamR, err := tieBeam.Split(f.BraceRise); err != nil {
-	// 	panic(err)
-	// } else if tieBrace1, _, err := tieBeamR.Split(-f.BraceRise); err != nil {
-	// 	panic(err)
-	// } else {
-	// 	brace.NewContinuousMemberBetweenNodes(postBrace0, tieBrace0)
-	// 	brace.NewContinuousMemberBetweenNodes(postBrace1, tieBrace1)
-	// }
 
 	// connect with top plates and plate braces
-	if first {
-		return
+	if !first {
+		// roof middle nodes
+		rtt := f.m.NewNode(0, f.Height+f.Width/2*f.RoofRise/f.RoofRun, z-f.Length/4)
+		rtt0 := f.m.NewNode(-f.Width/2, f.Height, z-f.Length/4)
+		rtt1 := f.m.NewNode(f.Width/2, f.Height, z-f.Length/4)
+
+		// middle rafters
+		rafter.NewContinuousMemberBetweenNodes(rtt0, rtt)
+		rafter.NewContinuousMemberBetweenNodes(rtt1, rtt)
+
+		prev0 := f.posts[0]
+		prev1 := f.posts[1]
+
+		// connect with plates
+		plateA0 := plate.NewContinuousMemberBetweenNodes(post00.End(), rtt0)
+		plateB0 := plate.NewContinuousMemberBetweenNodes(prev0.End(), rtt0)
+		plateA1 := plate.NewContinuousMemberBetweenNodes(post01.End(), rtt1)
+		plateB1 := plate.NewContinuousMemberBetweenNodes(prev1.End(), rtt1)
+
+		// add plate braces
+		if _, err := post00.Brace(plateA0, brace, f.BraceRise, model.QuadrantNP); err != nil {
+			panic(err)
+		}
+		if _, err := post01.Brace(plateA1, brace, f.BraceRise, model.QuadrantNP); err != nil {
+			panic(err)
+		}
+		if _, err := f.posts[0].Brace(plateB0, brace, f.BraceRise, model.QuadrantNP); err != nil {
+			panic(err)
+		}
+		if _, err := f.posts[1].Brace(plateB1, brace, f.BraceRise, model.QuadrantNP); err != nil {
+			panic(err)
+		}
 	}
-
-	rtt := f.m.NewNode(0, f.Height+f.Width/2*f.RoofRise/f.RoofRun, z-f.Length/4)
-	rtt0 := f.m.NewNode(-f.Width/2, f.Height, z-f.Length/4)
-	rtt1 := f.m.NewNode(f.Width/2, f.Height, z-f.Length/4)
-
-	rafter.NewContinuousMemberBetweenNodes(rtt0, rtt)
-	rafter.NewContinuousMemberBetweenNodes(rtt1, rtt)
-
-	topB0 := f.m.FindNearestNode(-f.Width/2, f.Height, z-betweenBents)
-	topB1 := f.m.FindNearestNode(f.Width/2, f.Height, z-betweenBents)
-
-	// connect with plates
-	p00 := plate.NewContinuousMemberBetweenNodes(topA0, rtt0)
-	p01 := plate.NewContinuousMemberBetweenNodes(topB0, rtt0)
-	p10 := plate.NewContinuousMemberBetweenNodes(topA1, rtt1)
-	p11 := plate.NewContinuousMemberBetweenNodes(topB1, rtt1)
-
-	// add plate braces
-	if pb0, _, err := p00.Split(f.BraceRise); err != nil {
-		panic(err)
-	} else if pb1, _, err := p10.Split(f.BraceRise); err != nil {
-		panic(err)
-	} else if postAttach0, err := f.m.FindNearestMemberAndSplitAt(pb0.X, pb0.Y-f.BraceRise, pb0.Z+f.BraceRise); err != nil {
-		panic(fmt.Sprintf("could not find the post attachment for brace: %e", err))
-	} else if postAttach1, err := f.m.FindNearestMemberAndSplitAt(pb1.X, pb1.Y-f.BraceRise, pb1.Z+f.BraceRise); err != nil {
-		panic(fmt.Sprintf("could not find the post attachment for brace, %e", err))
-	} else {
-		brace.NewContinuousMemberBetweenNodes(pb0, postAttach0)
-		brace.NewContinuousMemberBetweenNodes(pb1, postAttach1)
-	}
-
-	if pb0, _, err := p01.Split(f.BraceRise); err != nil {
-		panic(err)
-	} else if pb1, _, err := p11.Split(f.BraceRise); err != nil {
-		panic(err)
-	} else if postAttach0, err := f.m.FindNearestMemberAndSplitAt(pb0.X, pb0.Y-f.BraceRise, pb0.Z-f.BraceRise); err != nil {
-		panic(fmt.Sprintf("could not find the post attachment for brace: %e", err))
-	} else if postAttach1, err := f.m.FindNearestMemberAndSplitAt(pb1.X, pb1.Y-f.BraceRise, pb1.Z-f.BraceRise); err != nil {
-		panic(fmt.Sprintf("could not find the post attachment for brace, %e", err))
-	} else {
-		brace.NewContinuousMemberBetweenNodes(pb0, postAttach0)
-		brace.NewContinuousMemberBetweenNodes(pb1, postAttach1)
-	}
-
+	f.posts = append([]*model.ContinuousMember{post00, post01}, f.posts...)
 }
