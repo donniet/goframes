@@ -5,10 +5,10 @@ import (
 )
 
 func TestDistanceTo(T *testing.T) {
-	m := NewModel()
+	m := NewModel(nil)
 	mat := m.NewMaterial("test")
-	sec := mat.NewSectionFromLibrary("test")
-	mem := sec.NewContinuousMember(0, 0, 0, 1, 0, 0)
+	sec := m.NewSectionFromLibrary(mat, "test")
+	mem := m.NewContinuousMember(sec, 0, 0, 0, 1, 0, 0)
 
 	if t, d := mem.DistanceTo(0, 0, 0); d != 0 || t != 0 {
 		T.Errorf("distance to origin non-zero")

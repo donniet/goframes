@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 )
@@ -144,7 +145,8 @@ type ContinuousMember struct {
 	nodes   []*Node
 	section *Section
 	// TODO: add offsets and end fixity's
-	model *Skyciv
+	model         *Skyciv
+	RotationAngle float64
 }
 
 func (mem *ContinuousMember) Begin() *Node {
@@ -284,10 +286,11 @@ func (l *ContinuousMemberList) MarshalJSON() ([]byte, error) {
 			mems[k] = &Member{
 				Type:  "normal_continuous",
 				NodeA: A.Id, NodeB: B.Id,
-				SectionId: c.section.Id,
-				FixityA:   "FFFFFF",
-				FixityB:   "FFFFFF",
-				Id:        k,
+				SectionId:     c.section.Id,
+				FixityA:       "FFFFFF",
+				FixityB:       "FFFFFF",
+				Id:            k,
+				RotationAngle: c.RotationAngle,
 			}
 			k++
 		}
@@ -356,7 +359,7 @@ searchLoop:
 	} else if n1, err := against.SplitFrom(inter, d1); err != nil {
 		return nil, err
 	} else {
-		return sec.NewContinuousMemberBetweenNodes(n0, n1), nil
+		return m.model.NewContinuousMemberBetweenNodes(m.section, n0, n1), nil
 	}
 }
 
@@ -438,7 +441,16 @@ type Material struct {
 	ShearModulusXZ     float64 `json:"shear_modulus_xz,omitempty"`
 	ShearModulusYZ     float64 `json:"shear_modulus_yz,omitempty"`
 	Id                 int     `json:"id"`
-	model              *Skyciv
+}
+
+type MaterialSet map[string]*Material
+
+func (ms MaterialSet) MarshalJSON() ([]byte, error) {
+	out := make(map[int]*Material)
+	for _, m := range ms {
+		out[m.Id] = m
+	}
+	return json.Marshal(out)
 }
 
 func torsionConstant(breadth, depth float64) float64 {
@@ -454,41 +466,40 @@ func torsionConstant(breadth, depth float64) float64 {
 	return a * b * b * b * (16./3. - 3.36*b/a*(1.-b*b*b*b/12./a/a/a/a))
 }
 
-func (m *Material) NewSectionFromLibrary(path ...string) *Section {
+func (m *Skyciv) NewSectionFromLibrary(material *Material, path ...string) *Section {
 	s := &Section{
-		MaterialId:  m.Id,
-		Id:          len(m.model.Sections) + 1,
-		model:       m.model,
+		MaterialId:  material.Id,
+		Id:          len(m.Sections) + 1,
 		LoadSection: path,
 	}
-	m.model.Sections[s.Id] = s
+	m.Sections[s.Id] = s
 	return s
 }
 
 // TODO: This function doesn't work with skyciv.  Use the library section instead
-func (m *Material) NewRectangularSection(breadth, depth float64) *Section {
-	s := &Section{
-		MaterialId: m.Id,
-		Id:         len(m.model.Sections) + 1,
-		model:      m.model,
-		Version:    SectionVersion,
-		Name:       fmt.Sprintf("%s %fx%f", m.Name, breadth, depth),
-		Area:       breadth * depth,
-		Iz:         breadth * depth * depth * depth / 12.,
-		Iy:         depth * breadth * breadth * breadth / 12.,
-		J:          torsionConstant(breadth, depth),
-		Aux: &SectionAux{
-			Composite:      false,
-			CentroidPoint:  []float64{breadth / 2, depth / 2},
-			CentroidLength: []float64{breadth / 2, depth / 2},
-			Depth:          depth,
-			Width:          breadth,
-			Alpha:          0,
-		},
-	}
-	m.model.Sections[s.Id] = s
-	return s
-}
+// func (m *Material) NewRectangularSection(breadth, depth float64) *Section {
+// 	s := &Section{
+// 		MaterialId: m.Id,
+// 		Id:         len(m.model.Sections) + 1,
+// 		model:      m.model,
+// 		Version:    SectionVersion,
+// 		Name:       fmt.Sprintf("%s %fx%f", m.Name, breadth, depth),
+// 		Area:       breadth * depth,
+// 		Iz:         breadth * depth * depth * depth / 12.,
+// 		Iy:         depth * breadth * breadth * breadth / 12.,
+// 		J:          torsionConstant(breadth, depth),
+// 		Aux: &SectionAux{
+// 			Composite:      false,
+// 			CentroidPoint:  []float64{breadth / 2, depth / 2},
+// 			CentroidLength: []float64{breadth / 2, depth / 2},
+// 			Depth:          depth,
+// 			Width:          breadth,
+// 			Alpha:          0,
+// 		},
+// 	}
+// 	m.model.Sections[s.Id] = s
+// 	return s
+// }
 
 type Polygon struct {
 	Name                  string        `json:"string"`
@@ -540,19 +551,19 @@ type Section struct {
 	model       *Skyciv
 }
 
-func (s *Section) NewContinuousMember(x0, y0, z0, x1, y1, z1 float64) *ContinuousMember {
-	n0 := s.model.NewNode(x0, y0, z0)
-	n1 := s.model.NewNode(x1, y1, z1)
-	return s.NewContinuousMemberBetweenNodes(n0, n1)
+func (s *Skyciv) NewContinuousMember(sec *Section, x0, y0, z0, x1, y1, z1 float64) *ContinuousMember {
+	n0 := s.NewNode(x0, y0, z0)
+	n1 := s.NewNode(x1, y1, z1)
+	return s.NewContinuousMemberBetweenNodes(sec, n0, n1)
 }
 
-func (s *Section) NewContinuousMemberBetweenNodes(n0, n1 *Node) *ContinuousMember {
+func (s *Skyciv) NewContinuousMemberBetweenNodes(sec *Section, n0, n1 *Node) *ContinuousMember {
 	c := &ContinuousMember{
 		nodes:   []*Node{n0, n1},
-		model:   s.model,
-		section: s,
+		model:   s,
+		section: sec,
 	}
-	s.model.ContinuousMembers.Append(c)
+	s.ContinuousMembers.Append(c)
 
 	return c
 }
@@ -662,7 +673,7 @@ type Skyciv struct {
 	Plates               map[int]*Plate       `json:"plates"`
 	MeshedPlates         map[int]*MeshedPlate `json:"meshed_plates"`
 	Sections             map[int]*Section     `json:"sections"`
-	Materials            map[int]*Material    `json:"materials"`
+	Materials            MaterialSet          `json:"materials"`
 	Supports             map[int]*Support     `json:"supports"`
 	Settlements          map[int]interface{}  `json:"settlements"`
 	Groups               []*Group             `json:"groups"`
@@ -688,22 +699,21 @@ const (
 	MaterialClassWood = "wood"
 )
 
-func NewModel() *Skyciv {
+func NewModel(mats *MaterialFile) *Skyciv {
+	var mset MaterialSet
+	var units interface{}
+	if mats != nil {
+		mset = mats.materialSet()
+		units = mats.Units
+	} else {
+		mset = make(MaterialSet)
+		units = "imperial"
+	}
+
 	return &Skyciv{
 		DataVersion: DataVersion,
 		Settings: Settings{
-			Units: &Units{
-				Length:           "ft",
-				SectionLength:    "in",
-				MaterialStrength: "ksi",
-				Density:          "lb/ft3",
-				Force:            "kip",
-				Moment:           "kip-ft",
-				Pressure:         "ksf",
-				Mass:             "kip",
-				Translation:      "in",
-				Stress:           "ksi",
-			},
+			Units: units,
 		},
 		Details: []Details{},
 		Nodes:   make(map[int]*Node),
@@ -711,7 +721,7 @@ func NewModel() *Skyciv {
 		Plates:               make(map[int]*Plate),
 		MeshedPlates:         make(map[int]*MeshedPlate),
 		Sections:             make(map[int]*Section),
-		Materials:            make(map[int]*Material),
+		Materials:            mset,
 		Supports:             make(map[int]*Support),
 		Settlements:          make(map[int]interface{}),
 		AreaLoads:            make(map[int]*AreaLoad),
@@ -747,7 +757,7 @@ func (nl NodeList) NodeIds() (ret []int) {
 	return
 }
 
-func (m *Skyciv) NewAreaLoad(nodes []*Node) (*AreaLoad, error) {
+func (m *Skyciv) NewAreaLoad(nodes ...*Node) (*AreaLoad, error) {
 	if len(nodes) < 3 {
 		return nil, fmt.Errorf("area loads must have at least 3 nodes")
 	}
@@ -783,22 +793,35 @@ func (m *Skyciv) NewSelfWeight() *SelfWeight {
 	return sw
 }
 
-func (m *Skyciv) GetMaterial(name string) *Material {
-	for _, m := range m.Materials {
-		if m.Name == name {
-			return m
-		}
+type MaterialFile struct {
+	Units     interface{} `json:"units"`
+	Materials []Material  `json:"materials"`
+}
+
+func (f *MaterialFile) materialSet() MaterialSet {
+	ret := make(MaterialSet)
+	for i, m := range f.Materials {
+		pm := new(Material)
+		*pm = m
+		pm.Id = i
+		ret[m.Name] = pm
 	}
-	return nil
+	return ret
+}
+
+func ReadMaterials(r io.Reader) (f *MaterialFile, err error) {
+	f = new(MaterialFile)
+	dec := json.NewDecoder(r)
+	err = dec.Decode(f)
+	return
 }
 
 func (m *Skyciv) NewMaterial(name string) *Material {
 	mat := &Material{
-		model: m,
-		Id:    len(m.Materials) + 1,
-		Name:  name,
+		Id:   len(m.Materials) + 1,
+		Name: name,
 	}
-	m.Materials[mat.Id] = mat
+	m.Materials[name] = mat
 	return mat
 }
 

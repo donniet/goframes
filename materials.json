@@ -1,0 +1,52 @@
+{
+    "units": {
+        "length": "ft",
+        "section_length": "in",
+        "material_strength": "ksi",
+        "density": "lb/ft3",
+        "force": "kip",
+        "moment": "kip-ft",
+        "pressure": "ksf",
+        "mass": "kip",
+        "translation": "in",
+        "stress": "ksi"
+    },
+    "materials": [
+        {
+            "name": "Red Pine (green)",
+            "class": "wood",
+            "elasticity_modulus": 1280,
+            "density": 25.0,
+            "poissons_ratio": 0.27,
+            "yield_strength": 0.26,
+            "ultimate_strength": 0.3
+        },
+        {
+            "name": "Red Pine",
+            "class": "wood",
+            "elasticity_modulus": 1630,
+            "density": 28.7168619,
+            "poissons_ratio": 0.27,
+            "yield_strength": 0.3,
+            "ultimate_strength": 0.46
+        },
+        {
+            "name": "Aspen",
+            "class": "wood",
+            "elasticity_modulus": 1170,
+            "density": 23.7,
+            "poissons_ratio": 0.374,
+            "yield_strength": 0.26,
+            "ultimate_strength": 0.26
+        },
+        {
+            "name": "Balsam Fir",
+            "class": "wood",
+            "elasticity_modulus": 1200,
+            "density": 21.3,
+            "poissons_ratio": 0.27, "_comment": "I don't have this on matweb, just guessed",
+            "yield_strength": 0.21,
+            "ultimate_strength": 0.21
+        }
+    ]
+}

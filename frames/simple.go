@@ -4,20 +4,20 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/donniet/goframes/materials"
 	"github.com/donniet/goframes/model"
 )
 
 type SimpleFrame struct {
-	m         *model.Skyciv
-	Width     float64
-	Height    float64
-	Length    float64
-	TieHeight float64
-	BraceRise float64
-	RoofRise  float64
-	RoofRun   float64
-	Bents     int
+	m            *model.Skyciv
+	Width        float64
+	Height       float64
+	Length       float64
+	TieHeight    float64
+	BraceRise    float64
+	RoofRise     float64
+	RoofRun      float64
+	Bents        int
+	MaterialFile *model.MaterialFile
 
 	RoofSnowLoad float64
 	RoofLiveLoad float64
@@ -33,16 +33,14 @@ func (f *SimpleFrame) Model() *model.Skyciv {
 	return f.m
 }
 
-func (f *SimpleFrame) Build() {
-	f.m = model.NewModel()
+func (f *SimpleFrame) Build(materialName string) {
+	f.m = model.NewModel(f.MaterialFile)
 
-	mats := materials.Create(f.m)
-
-	post := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
-	tie := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
-	rafter := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
-	brace := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "4 x 8")
-	plate := mats["Red Pine"].NewSectionFromLibrary("American", "NDS", "Sawn Lumber", "8 x 10")
+	post := f.m.NewSectionFromLibrary(f.m.Materials[materialName], "American", "NDS", "Sawn Lumber", "8 x 10")
+	tie := f.m.NewSectionFromLibrary(f.m.Materials[materialName], "American", "NDS", "Sawn Lumber", "8 x 10")
+	rafter := f.m.NewSectionFromLibrary(f.m.Materials[materialName], "American", "NDS", "Sawn Lumber", "8 x 10")
+	brace := f.m.NewSectionFromLibrary(f.m.Materials[materialName], "American", "NDS", "Sawn Lumber", "4 x 8")
+	plate := f.m.NewSectionFromLibrary(f.m.Materials[materialName], "American", "NDS", "Sawn Lumber", "8 x 10")
 
 	for z := 0.; z <= f.Length; z += f.Length / 2 {
 		f.bent(post, tie, rafter, brace, plate, z, f.Length/2)
@@ -87,7 +85,7 @@ func (f *SimpleFrame) windAreaLoad(windSpeed float64, loadGroup string) {
 			f.m.FindNearestNode(-f.Width/2, f.Height, z+f.Length/2),
 			f.m.FindNearestNode(-f.Width/2, 0, z+f.Length/2),
 		}
-		if al, err := f.m.NewAreaLoad(nl); err != nil {
+		if al, err := f.m.NewAreaLoad(nl...); err != nil {
 			panic(err)
 		} else {
 			al.LoadGroup = loadGroup
@@ -109,7 +107,7 @@ func (f *SimpleFrame) windAreaLoad(windSpeed float64, loadGroup string) {
 			f.m.FindNearestNode(0, roofTop, z+f.Length/4),
 			f.m.FindNearestNode(-f.Width/2, f.Height, z+f.Length/4),
 		}
-		if al, err := f.m.NewAreaLoad(nl); err != nil {
+		if al, err := f.m.NewAreaLoad(nl...); err != nil {
 			panic(err)
 		} else {
 			al.LoadGroup = loadGroup
@@ -133,7 +131,7 @@ func (f *SimpleFrame) roofAreaLoad(magnitude float64, loadGroup string) {
 			f.m.FindNearestNode(-f.Width/2, f.Height, z+f.Length/4),
 		}
 
-		if al, err := f.m.NewAreaLoad(nl); err != nil {
+		if al, err := f.m.NewAreaLoad(nl...); err != nil {
 			panic(err)
 		} else {
 			al.LoadGroup = loadGroup
@@ -149,7 +147,7 @@ func (f *SimpleFrame) roofAreaLoad(magnitude float64, loadGroup string) {
 			f.m.FindNearestNode(f.Width/2, f.Height, z+f.Length/4),
 		}
 
-		if al, err := f.m.NewAreaLoad(nl); err != nil {
+		if al, err := f.m.NewAreaLoad(nl...); err != nil {
 			panic(err)
 		} else {
 			al.LoadGroup = loadGroup
@@ -162,15 +160,15 @@ func (f *SimpleFrame) roofAreaLoad(magnitude float64, loadGroup string) {
 func (f *SimpleFrame) bent(post, tie, rafter, brace, plate *model.Section, z, betweenBents float64) {
 	first := len(f.posts) == 0
 
-	post00 := post.NewContinuousMember(-f.Width/2, 0, z, -f.Width/2, f.Height, z)
-	post01 := post.NewContinuousMember(f.Width/2, 0, z, f.Width/2, f.Height, z)
+	post00 := f.m.NewContinuousMember(post, -f.Width/2, 0, z, -f.Width/2, f.Height, z)
+	post01 := f.m.NewContinuousMember(post, f.Width/2, 0, z, f.Width/2, f.Height, z)
 
 	post00.Begin().FixedSupport()
 	post01.Begin().FixedSupport()
 
 	rooftop := f.m.NewNode(0, f.Height+f.Width/2*f.RoofRise/f.RoofRun, z)
-	rafter.NewContinuousMemberBetweenNodes(post00.End(), rooftop)
-	rafter.NewContinuousMemberBetweenNodes(post01.End(), rooftop)
+	f.m.NewContinuousMemberBetweenNodes(rafter, post00.End(), rooftop)
+	f.m.NewContinuousMemberBetweenNodes(rafter, post01.End(), rooftop)
 
 	var tieBeam *model.ContinuousMember
 
@@ -181,7 +179,7 @@ func (f *SimpleFrame) bent(post, tie, rafter, brace, plate *model.Section, z, be
 		fmt.Fprintf(os.Stderr, "error splitting post for tie beam: %v\n", err)
 		return
 	} else {
-		tieBeam = tie.NewContinuousMemberBetweenNodes(tieNode0, tieNode1)
+		tieBeam = f.m.NewContinuousMemberBetweenNodes(tie, tieNode0, tieNode1)
 	}
 
 	// add braces
@@ -200,17 +198,17 @@ func (f *SimpleFrame) bent(post, tie, rafter, brace, plate *model.Section, z, be
 		rtt1 := f.m.NewNode(f.Width/2, f.Height, z-f.Length/4)
 
 		// middle rafters
-		rafter.NewContinuousMemberBetweenNodes(rtt0, rtt)
-		rafter.NewContinuousMemberBetweenNodes(rtt1, rtt)
+		f.m.NewContinuousMemberBetweenNodes(rafter, rtt0, rtt)
+		f.m.NewContinuousMemberBetweenNodes(rafter, rtt1, rtt)
 
 		prev0 := f.posts[0]
 		prev1 := f.posts[1]
 
 		// connect with plates
-		plateA0 := plate.NewContinuousMemberBetweenNodes(post00.End(), rtt0)
-		plateB0 := plate.NewContinuousMemberBetweenNodes(prev0.End(), rtt0)
-		plateA1 := plate.NewContinuousMemberBetweenNodes(post01.End(), rtt1)
-		plateB1 := plate.NewContinuousMemberBetweenNodes(prev1.End(), rtt1)
+		plateA0 := f.m.NewContinuousMemberBetweenNodes(plate, post00.End(), rtt0)
+		plateB0 := f.m.NewContinuousMemberBetweenNodes(plate, prev0.End(), rtt0)
+		plateA1 := f.m.NewContinuousMemberBetweenNodes(plate, post01.End(), rtt1)
+		plateB1 := f.m.NewContinuousMemberBetweenNodes(plate, prev1.End(), rtt1)
 
 		// add plate braces
 		if _, err := post00.Brace(plateA0, brace, f.BraceRise, model.QuadrantNP); err != nil {
