@@ -29,6 +29,7 @@ var (
 	WindSpeed  = 177.     // ft/s = 120 mph = 54 m/s
 
 	materialFile string
+	material     string
 )
 
 const (
@@ -37,6 +38,8 @@ const (
 
 func init() {
 	flag.StringVar(&materialFile, "materials", "materials.json", "path to materials json file")
+	flag.StringVar(&material, "mat", "Red Pine", "material to build frame from")
+	flag.Parse()
 }
 
 func main() {
@@ -80,7 +83,7 @@ func main() {
 		AirDensity:   AirDensity,
 		MaterialFile: mats,
 	}
-	f.Build("Red Pine")
+	f.Build(material)
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "\t")
